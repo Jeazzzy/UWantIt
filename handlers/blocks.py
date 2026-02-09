@@ -1,86 +1,87 @@
+import asyncio
 from aiogram import types, F, Router
 from aiogram.filters import StateFilter
-from keyboards import nav_keyboard, skip_keyboard
 from states import AddPurchase
 
 router = Router()
 
-# Блокировка файлов в waiting_name
-@router.message(StateFilter(AddPurchase.waiting_name),
-                F.document | F.photo | F.video | F.voice | F.video_note | F.sticker | F.animation | F.audio)
-async def block_files_in_name(message: types.Message):
-    """Блокировка файлов при вводе названия"""
-    await message.answer(
-        "❌ **Только текст!**\n\n"
-        "📎 Файлы, фото, видео — **ЗАПРЕЩЕНЫ**\n"
-        "✍️ Напиши **название вещи** текстом",
-        reply_markup=nav_keyboard(),
+# ===== ГЛОБАЛЬНЫЕ БЛОКИРОВЩИКИ (работают везде) =====
+
+@router.message(F.sticker | F.animation | F.video_note | F.voice)
+async def block_forbidden_content(message: types.Message):
+    """Блокировка стикеров, гифок, кружков, голосовых"""
+    await message.delete()
+    warning = await message.answer(
+        "❌ **Запрещено!**\n\n"
+        "🚫 Стикеры, гифки, кружки, голосовые сообщения не принимаются.",
         parse_mode="Markdown"
     )
+    await asyncio.sleep(3)
+    await warning.delete()
 
-# Блокировка файлов в waiting_price
-@router.message(StateFilter(AddPurchase.waiting_price),
-                F.document | F.photo | F.video | F.voice | F.video_note | F.sticker | F.animation | F.audio)
+# ===== БЛОКИРОВЩИКИ ДЛЯ FSM СОСТОЯНИЙ =====
+
+# Блокировка всех НЕ-текстовых в текстовых полях
+@router.message(
+    StateFilter(AddPurchase.waiting_name, AddPurchase.waiting_store, AddPurchase.waiting_link_desc),
+    F.document | F.photo | F.video | F.audio
+)
+async def block_files_in_text_fields(message: types.Message):
+    """Блокировка файлов в текстовых полях"""
+    await message.delete()
+    warning = await message.answer(
+        "❌ **Только текст!**\n\n"
+        "📎 Файлы, фото, видео запрещены в этом поле.",
+        parse_mode="Markdown"
+    )
+    await asyncio.sleep(3)
+    await warning.delete()
+
+# Блокировка всех НЕ-текстовых в поле цены
+@router.message(
+    StateFilter(AddPurchase.waiting_price),
+    F.document | F.photo | F.video | F.audio
+)
 async def block_files_in_price(message: types.Message):
-    """Блокировка файлов при вводе цены"""
-    await message.answer(
-        "❌ **Только текст!**\n\n"
-        "📎 Файлы, фото, видео — **ЗАПРЕЩЕНЫ**\n"
-        "💰 Введи **цену** цифрами (например: 1500 или 1500.50)",
-        reply_markup=nav_keyboard(),
+    """Блокировка файлов в поле цены"""
+    await message.delete()
+    warning = await message.answer(
+        "❌ **Только текст с цифрами!**\n\n"
+        "📎 Файлы запрещены. Введи цену числом.",
         parse_mode="Markdown"
     )
+    await asyncio.sleep(3)
+    await warning.delete()
 
-# Блокировка файлов в waiting_store
-@router.message(StateFilter(AddPurchase.waiting_store),
-                F.document | F.photo | F.video | F.voice | F.video_note | F.sticker | F.animation | F.audio)
-async def block_files_in_store(message: types.Message):
-    """Блокировка файлов при вводе магазина"""
-    await message.answer(
-        "❌ **Только текст!**\n\n"
-        "📎 Файлы, фото, видео — **ЗАПРЕЩЕНЫ**\n"
-        "🏪 Напиши **название магазина** текстом",
-        reply_markup=nav_keyboard(),
+# Блокировка НЕ-фото в поле фото
+@router.message(
+    StateFilter(AddPurchase.waiting_photo),
+    F.document | F.video | F.audio
+)
+async def block_non_photo_files(message: types.Message):
+    """Блокировка не-фото файлов"""
+    await message.delete()
+    warning = await message.answer(
+        "❌ **Только фото!**\n\n"
+        "📎 PDF, ZIP, DOC, видео запрещены.\n"
+        "📷 Отправь **только изображение** или нажми **Пропустить**.",
         parse_mode="Markdown"
     )
+    await asyncio.sleep(3)
+    await warning.delete()
 
-# Блокировка файлов в waiting_link_desc
-@router.message(StateFilter(AddPurchase.waiting_link_desc),
-                F.document | F.photo | F.video | F.voice | F.video_note | F.sticker | F.animation | F.audio)
-async def block_files_in_desc(message: types.Message):
-    """Блокировка файлов при вводе описания"""
-    await message.answer(
-        "❌ **Только текст!**\n\n"
-        "📎 Файлы, фото, видео — **ЗАПРЕЩЕНЫ**\n"
-        "💬 Напиши **только текст** или [Пропустить]",
-        reply_markup=skip_keyboard(),
+# Блокировка ВСЕХ файлов/фото в состоянии выбора задержки
+@router.message(
+    StateFilter(AddPurchase.waiting_delay),
+    F.document | F.photo | F.video | F.audio
+)
+async def block_files_in_delay(message: types.Message):
+    """Блокировка файлов при выборе задержки"""
+    await message.delete()
+    warning = await message.answer(
+        "❌ **Файлы запрещены!**\n\n"
+        "⏱️ Выбери время кнопками выше.",
         parse_mode="Markdown"
     )
-
-# Блокировка НЕ-фото в waiting_photo
-@router.message(StateFilter(AddPurchase.waiting_photo),
-                F.document | F.video | F.voice | F.video_note | F.sticker | F.animation | F.audio)
-async def block_non_photo(message: types.Message):
-    """Блокировка не-фото файлов на шаге с фото"""
-    from keyboards import photo_keyboard
-    await message.answer(
-        "❌Только ФОТО вещи!\n\n"
-        "📎 PDF, ZIP, DOC, видео — ЗАПРЕЩЕНЫ\n"
-        "📷 Отправь **только фото** или [Пропустить]",
-        reply_markup=photo_keyboard(),
-        parse_mode="Markdown"
-    )
-
-# Блокировка текста в waiting_photo (кроме "Пропустить")
-@router.message(StateFilter(AddPurchase.waiting_photo), F.text)
-async def block_text_in_photo(message: types.Message):
-    """Блокировка текста на шаге с фото (кроме Пропустить)"""
-    from keyboards import photo_keyboard
-    if message.text not in ["Пропустить", "🔙 Назад", "🏠 Главное меню"]:
-        await message.answer(
-            "❌ **Только ФОТО или 'Пропустить'!**\n\n"
-            "📷 Отправь **фото вещи**\n"
-            "или нажми **[Пропустить]**",
-            reply_markup=photo_keyboard(),
-            parse_mode="Markdown"
-        )
+    await asyncio.sleep(3)
+    await warning.delete()

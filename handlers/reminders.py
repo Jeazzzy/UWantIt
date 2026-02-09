@@ -1,122 +1,126 @@
-import os
 import asyncio
 import aiosqlite
+import os
 from datetime import datetime
-from aiogram import types, F, Router, Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from keyboards import main_keyboard
-from utils import escape_md
+from aiogram import Bot, types, Router, F
 from config import DB_NAME
+from keyboards import main_inline_keyboard
 
 router = Router()
 
 
-async def check_reminder(user_id: int, purchase_id: int, bot: Bot):
-    """Проверка и отправка напоминания"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute('SELECT remind_at FROM purchases WHERE id=?', (purchase_id,))
-        row = await cursor.fetchone()
-        if row:
-            remind_time = datetime.fromisoformat(row[0])
-            seconds = (remind_time - datetime.now()).total_seconds()
-            if seconds > 0:
-                await asyncio.sleep(seconds)
-
-            cursor = await db.execute(
-                'SELECT id, name, price, store, description, link, photo_path FROM purchases WHERE id=? AND user_id=? AND status="pending"',
-                (purchase_id, user_id)
-            )
-            row = await cursor.fetchone()
-            if row:
-                kb = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text="✅ Купить", callback_data=f"dec_buy_{row[0]}")],
-                        [InlineKeyboardButton(text="⏳ Подождать", callback_data=f"dec_wait_{row[0]}")],
-                        [InlineKeyboardButton(text="❌ Не нравится", callback_data=f"dec_reject_{row[0]}")]
-                    ]
+async def check_reminders_loop(bot: Bot):
+    """Фоновая задача проверки напоминаний"""
+    while True:
+        try:
+            async with aiosqlite.connect(DB_NAME) as db:
+                now = datetime.now().isoformat()
+                cursor = await db.execute(
+                    'SELECT id, user_id, name, price, store, link, description, photo_path FROM purchases WHERE remind_at <= ? AND reminded = 0',
+                    (now,)
                 )
-                text = f"⏰ Напоминание!\n📦 **{escape_md(row[1])}**\n💰 {row[2]:,.0f}₽\n🏪 {escape_md(row[3])}"
-                if row[5]:  # link
-                    text += f"\n🔗 {escape_md(row[5])}"
-                if row[4]:  # description
-                    text += f"\n\n{escape_md(row[4])}"
+                purchases = await cursor.fetchall()
 
-                if row[6] and os.path.exists(row[6]):  # photo_path
-                    await bot.send_photo(user_id, FSInputFile(row[6]), caption=text, reply_markup=kb,
-                                         parse_mode="Markdown")
-                else:
-                    await bot.send_message(user_id, text, reply_markup=kb, parse_mode="Markdown")
+                for p in purchases:
+                    purchase_id, user_id, name, price, store, link, desc, photo_path = p
+
+                    # Формируем текст напоминания
+                    text = (
+                        f"⏰ **Напоминание о покупке!**\n\n"
+                        f"📦 **{name}**\n"
+                        f"💰 {price:,.0f}₽\n"
+                        f"🏪 {store}\n"
+                    )
+
+                    if desc:
+                        text += f"📝 {desc}\n"
+
+                    if link:
+                        text += f"🔗 [Ссылка]({link})\n"
+
+                    text += "\n❓ Всё ещё хочешь купить?"
+
+                    # Клавиатура
+                    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            types.InlineKeyboardButton(text="✅ Да, куплю", callback_data=f"buy_{purchase_id}"),
+                            types.InlineKeyboardButton(text="❌ Нет, передумал", callback_data=f"cancel_{purchase_id}")
+                        ]
+                    ])
+
+                    try:
+                        # ✅ Проверяем существование файла
+                        if photo_path and os.path.exists(photo_path):
+                            await bot.send_photo(
+                                chat_id=user_id,
+                                photo=types.FSInputFile(photo_path),
+                                caption=text,
+                                reply_markup=keyboard,
+                                parse_mode="Markdown"
+                            )
+                        else:
+                            await bot.send_message(
+                                chat_id=user_id,
+                                text=text,
+                                reply_markup=keyboard,
+                                parse_mode="Markdown"
+                            )
+
+                        # Отмечаем как отправленное
+                        await db.execute('UPDATE purchases SET reminded = 1 WHERE id = ?', (purchase_id,))
+                        await db.commit()
+                    except Exception as e:
+                        print(f"Ошибка отправки напоминания: {e}")
+
+        except Exception as e:
+            print(f"Ошибка в check_reminders_loop: {e}")
+
+        await asyncio.sleep(10)  # Проверяем каждые 10 секунд
 
 
-@router.callback_query(F.data.startswith("dec_buy_"))
-async def buy_decision_callback(callback: types.CallbackQuery):
-    """Решение: Купить"""
-    purchase_id = int(callback.data.split("_")[2])
+@router.callback_query(F.data.startswith("buy_"))
+async def buy_callback(callback: types.CallbackQuery):
+    """Пользователь купил"""
+    purchase_id = int(callback.data.split("_")[1])
+
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('UPDATE purchases SET status="buy" WHERE id=? AND user_id=?',
-                         (purchase_id, callback.from_user.id))
+        await db.execute('UPDATE purchases SET status = "bought" WHERE id = ?', (purchase_id,))
         await db.commit()
 
+    # ✅ Проверяем тип сообщения
     if callback.message.photo:
-        if callback.message.caption:
-            await callback.message.edit_caption(
-                caption=callback.message.caption + "\n\n✅ Отмечено как 'Куплено!'",
-                parse_mode="Markdown"
-            )
-        else:
-            await callback.message.delete()
-            await callback.message.answer("✅ Куплено!", reply_markup=main_keyboard())
-    else:
-        await callback.message.edit_text(
-            callback.message.text + "\n\n✅ Отмечено как 'Куплено!'",
+        await callback.message.edit_caption(
+            caption=(callback.message.caption or "") + "\n\n✅ **Отмечено как купленное**",
             parse_mode="Markdown"
         )
-    await callback.answer("✅ Куплено!")
-
-
-@router.callback_query(F.data.startswith("dec_wait_"))
-async def wait_decision_callback(callback: types.CallbackQuery):
-    """Решение: Подождать"""
-    purchase_id = int(callback.data.split("_")[2])
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('UPDATE purchases SET status="wait" WHERE id=? AND user_id=?',
-                         (purchase_id, callback.from_user.id))
-        await db.commit()
-
-    if callback.message.photo:
-        if callback.message.caption:
-            await callback.message.edit_caption(
-                caption=callback.message.caption + "\n\n⏳ Отложено!",
-                parse_mode="Markdown"
-            )
-        else:
-            await callback.message.delete()
-            await callback.message.answer("⏳ Отложено!", reply_markup=main_keyboard())
     else:
         await callback.message.edit_text(
-            callback.message.text + "\n\n⏳ Отложено!",
+            text=callback.message.text + "\n\n✅ **Отмечено как купленное**",
             parse_mode="Markdown"
         )
-    await callback.answer("⏳ Отложено!")
+
+    await callback.answer("✅ Покупка завершена!")
 
 
-@router.callback_query(F.data.startswith("dec_reject_"))
-async def reject_decision_callback(callback: types.CallbackQuery):
-    """Решение: Отклонить"""
-    purchase_id = int(callback.data.split("_")[2])
+@router.callback_query(F.data.startswith("cancel_"))
+async def cancel_callback(callback: types.CallbackQuery):
+    """Пользователь передумал"""
+    purchase_id = int(callback.data.split("_")[1])
+
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute('SELECT photo_path FROM purchases WHERE id=? AND user_id=?',
-                                  (purchase_id, callback.from_user.id))
-        row = await cursor.fetchone()
-        if row and row[0] and os.path.exists(row[0]):
-            os.remove(row[0])
-        await db.execute('DELETE FROM purchases WHERE id=? AND user_id=?',
-                         (purchase_id, callback.from_user.id))
+        await db.execute('UPDATE purchases SET status = "cancelled" WHERE id = ?', (purchase_id,))
         await db.commit()
 
-    try:
-        await callback.message.delete()
-    except:
-        pass
-    await callback.message.answer("❌ Отклонено!", reply_markup=main_keyboard())
-    await callback.answer("❌ Отклонено!")
+    # ✅ Проверяем тип сообщения
+    if callback.message.photo:
+        await callback.message.edit_caption(
+            caption=(callback.message.caption or "") + "\n\n❌ **Покупка отменена**",
+            parse_mode="Markdown"
+        )
+    else:
+        await callback.message.edit_text(
+            text=callback.message.text + "\n\n❌ **Покупка отменена**",
+            parse_mode="Markdown"
+        )
+
+    await callback.answer("❌ Покупка отменена!")
