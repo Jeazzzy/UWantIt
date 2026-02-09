@@ -80,7 +80,7 @@ async def init_db():
                              )
                          ''')
 
-        # ✅ Проверяем и добавляем отсутствующие столбцы
+        # Проверяем и добавляем отсутствующие столбцы
         cursor = await db.execute("PRAGMA table_info(purchases)")
         columns = [row[1] for row in await cursor.fetchall()]
 
@@ -91,6 +91,10 @@ async def init_db():
         if 'status' not in columns:
             await db.execute('ALTER TABLE purchases ADD COLUMN status TEXT DEFAULT "pending"')
             print("✅ Добавлен столбец 'status'")
+
+        # Индексы для производительности
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_user_status ON purchases(user_id, status)')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_remind_at ON purchases(remind_at, reminded)')
 
         await db.commit()
         print("✅ База данных инициализирована")

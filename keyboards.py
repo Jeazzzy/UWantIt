@@ -101,18 +101,6 @@ def time_keyboard():
         one_time_keyboard=True
     )
 
-# Старая main_keyboard для обратной совместимости (удалим позже)
-def main_keyboard():
-    """УСТАРЕЛА - используй main_inline_keyboard()"""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🛒 Добавить покупку")],
-            [KeyboardButton(text="📋 Ждут решения"), KeyboardButton(text="✅ Мои покупки")],
-            [KeyboardButton(text="⏳ Отложенные"), KeyboardButton(text="❌ Отказ")]
-        ],
-        resize_keyboard=True,
-        persistent=True
-    )
 
 def fsm_nav_inline(show_skip=False):
     """Inline навигация для FSM"""
